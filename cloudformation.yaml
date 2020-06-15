@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Lambda Terminal CloudFormation Template
+  
+Resources:
+  LambdaTerminalUser:
+    Type: 'AWS::IAM::User'
+    Properties:
+      Policies:
+        - PolicyName: LambdaTerminalLambdaInvokeLambda
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: 
+                  - !GetAtt 
+                    - LambdaTerminalLambda
+                    - Arn        
+        - PolicyName: LambdaTerminalCommunicationChannel
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: 'execute-api:ManageConnections'
+                Resource:
+                  - !Join 
+                    - ''
+                    - - 'arn:aws:execute-api:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - ':'
+                      - !Ref LambdaTerminalWebSocket
+                      - /
+                      - !Ref LambdaTerminalWebSocketStage
+                      - '/POST/@connections/{connectionId}'
+
+  LambdaTerminalAccessKey:
+    Type: 'AWS::IAM::AccessKey'
+    Properties:
+      UserName: !Ref LambdaTerminalUser
+
+  LambdaTerminalLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: LambdaTerminalLambdaRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action: 'execute-api:ManageConnections'
+                Resource:
+                  - !Join 
+                    - ''
+                    - - 'arn:aws:execute-api:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - ':'
+                      - !Ref LambdaTerminalWebSocket
+                      - /
+                      - !Ref LambdaTerminalWebSocketStage
+                      - '/POST/@connections/{connectionId}'
+
+  LambdaTerminalLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Role: !GetAtt 
+        - LambdaTerminalLambdaRole
+        - Arn
+      Code:
+        S3Bucket: eigensheep
+        S3Key: lambda-terminal.zip
+      Runtime: nodejs12.x
+      Handler: index.handler
+      Timeout: 300
+      MemorySize: 128
+      Environment:
+        Variables:
+          WEBSOCKET_ENDPOINT: 
+            Fn::Join:
+            - ''
+            - - !Ref LambdaTerminalWebSocket
+              - '.execute-api.'
+              - !Ref 'AWS::Region'
+              - '.amazonaws.com/'
+              - !Ref LambdaTerminalWebSocketStage
+      Description: Lambda Terminal
+
+  
+  LambdaTerminalWebSocket:
+    Type: 'AWS::ApiGatewayV2::Api'
+    Properties:
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.message
+      Description: Lambda Terminal WebSocket Host
+      Name: Lambda Terminal WebSocket
+
+  
+  LambdaTerminalWebSocketDefaultRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref LambdaTerminalWebSocket
+      RouteKey: $default
+      RouteResponseSelectionExpression: $default
+      AuthorizationType: NONE
+      OperationName: DefaultRoute
+      Target: !Join 
+        - /
+        - - integrations
+          - !Ref LambdaTerminalWebSocketDefaultInteg
+
+  LambdaTerminalWebSocketDefaultInteg:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref LambdaTerminalWebSocket
+      Description: Default Integration
+      IntegrationType: MOCK
+      RequestTemplates:
+        '200': '{"statusCode" : 200}'
+      TemplateSelectionExpression: '200'
+
+  LambdaTerminalWebSocketDefaultIntegResp:
+    Type: 'AWS::ApiGatewayV2::IntegrationResponse'
+    Properties:
+      ApiId: !Ref LambdaTerminalWebSocket
+      IntegrationId: !Ref LambdaTerminalWebSocketDefaultInteg
+      IntegrationResponseKey: $default
+      ResponseTemplates:
+        '200': '{"action": "connectionInfo", "connectionId": "$context.connectionId"}'
+      TemplateSelectionExpression: '200'
+
+  LambdaTerminalWebSocketDefaultRouteResponse:
+    Type: 'AWS::ApiGatewayV2::RouteResponse'
+    Properties:
+      RouteId: !Ref LambdaTerminalWebSocketDefaultRoute
+      ApiId: !Ref LambdaTerminalWebSocket
+      RouteResponseKey: $default
+
+  LambdaTerminalWebSocketDeployment:
+    Type: 'AWS::ApiGatewayV2::Deployment'
+    DependsOn:
+      - LambdaTerminalWebSocketDefaultRoute
+    Properties:
+      ApiId: !Ref LambdaTerminalWebSocket
+
+  LambdaTerminalWebSocketStage:
+    Type: 'AWS::ApiGatewayV2::Stage'
+    Properties:
+      StageName: main
+      Description: Lambda Terminal WebSocket Main Stage
+      DeploymentId: !Ref LambdaTerminalWebSocketDeployment
+      ApiId: !Ref LambdaTerminalWebSocket
+
+  
+Outputs:
+  Configuration:
+    Value: !Join 
+      - ''
+      - - 'AccessKey: '
+        - !Ref LambdaTerminalAccessKey
+        - '; SecretKey: '
+        - !GetAtt 
+          - LambdaTerminalAccessKey
+          - SecretAccessKey
+        - '; Region: '
+        - !Ref 'AWS::Region'
+        - '; WebSocket: '
+        - !Ref LambdaTerminalWebSocket
+        - '; WSStage: '
+        - !Ref LambdaTerminalWebSocketStage
+        - '; Lambda: '
+        - !Ref LambdaTerminalLambda
